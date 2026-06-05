@@ -2,7 +2,6 @@
 
 import {
   motion,
-  useAnimationFrame,
   useReducedMotion,
   useScroll,
   useSpring,
@@ -366,9 +365,12 @@ export default function ScrollSequence({
   const wrapperRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const framesRef = useRef<Array<HTMLImageElement | undefined>>([]);
-  const currentPositionRef = useRef(-1);
-  const currentFrameRef = useRef(-1);
-  const pendingPositionRef = useRef(0);
+  const targetFrameRef = useRef(0);
+  const renderedFrameRef = useRef(0);
+  const rafRef = useRef<number | null>(null);
+  const lastDrawnFrameRef = useRef(-1);
+  const lastDrawnNextFrameRef = useRef(-1);
+  const lastDrawnAlphaRef = useRef(-1);
   const lastViewportWidthRef = useRef(0);
   const orientationResizeTimeoutRef = useRef<number | null>(null);
   const firstFrameReadyRef = useRef(false);
@@ -477,37 +479,61 @@ export default function ScrollSequence({
     };
   }, []);
 
-  const render = useCallback(
+  const drawInterpolatedFrame = useCallback(
     (position: number, force = false) => {
       const canvas = canvasRef.current;
-      const targetFrameIndex = Math.min(
-        frameCount - 1,
-        Math.max(0, Math.round(position))
-      );
-
-      pendingPositionRef.current = targetFrameIndex;
 
       if (!canvas) {
         return;
       }
 
-      const safeFrameIndex = getNearestLoadedFrame(targetFrameIndex);
-      const frame = framesRef.current[safeFrameIndex];
+      const clampedPosition = Math.min(frameCount - 1, Math.max(0, position));
+      const baseIndex = Math.floor(clampedPosition);
+      const nextIndex = Math.min(baseIndex + 1, frameCount - 1);
+      const alpha = clampedPosition - baseIndex;
+      const safeBaseIndex = getNearestLoadedFrame(baseIndex);
+      const safeNextIndex = getNearestLoadedFrame(nextIndex);
+      const frame = framesRef.current[safeBaseIndex];
+      const nextFrame = framesRef.current[safeNextIndex];
 
       if (!isFrameDrawable(frame)) {
         return;
       }
 
-      if (!force && safeFrameIndex === currentFrameRef.current) {
+      if (
+        !force &&
+        safeBaseIndex === lastDrawnFrameRef.current &&
+        safeNextIndex === lastDrawnNextFrameRef.current &&
+        Math.abs(alpha - lastDrawnAlphaRef.current) < 0.01
+      ) {
         return;
       }
 
-      currentFrameRef.current = safeFrameIndex;
-      currentPositionRef.current = safeFrameIndex;
-      drawFrame(canvas, frame, fitMode);
+      lastDrawnFrameRef.current = safeBaseIndex;
+      lastDrawnNextFrameRef.current = safeNextIndex;
+      lastDrawnAlphaRef.current = alpha;
+      drawFrame(
+        canvas,
+        frame,
+        fitMode,
+        nextFrame,
+        safeNextIndex !== safeBaseIndex ? alpha : 0
+      );
     },
     [fitMode, frameCount, getNearestLoadedFrame]
   );
+
+  const animateFrames = useCallback(() => {
+    const current = renderedFrameRef.current;
+    const target = targetFrameRef.current;
+    const next = current + (target - current) * 0.18;
+
+    renderedFrameRef.current =
+      Math.abs(target - next) < 0.01 ? target : next;
+
+    drawInterpolatedFrame(renderedFrameRef.current);
+    rafRef.current = window.requestAnimationFrame(animateFrames);
+  }, [drawInterpolatedFrame]);
 
   const resizeCanvas = useCallback(() => {
     const canvas = canvasRef.current;
@@ -529,9 +555,8 @@ export default function ScrollSequence({
       canvas.style.height = `${height}px`;
     }
 
-    const position = Math.max(0, currentPositionRef.current);
-    render(position, true);
-  }, [render]);
+    drawInterpolatedFrame(renderedFrameRef.current, true);
+  }, [drawInterpolatedFrame]);
 
   useEffect(() => {
     let cancelled = false;
@@ -540,9 +565,11 @@ export default function ScrollSequence({
     framesRef.current = new Array(frameCount);
     loadedFramesRef.current = new Set();
     firstFrameReadyRef.current = false;
-    currentPositionRef.current = -1;
-    currentFrameRef.current = -1;
-    pendingPositionRef.current = 0;
+    targetFrameRef.current = 0;
+    renderedFrameRef.current = 0;
+    lastDrawnFrameRef.current = -1;
+    lastDrawnNextFrameRef.current = -1;
+    lastDrawnAlphaRef.current = -1;
     setFirstFrameReady(false);
 
     resizeCanvas();
@@ -572,23 +599,21 @@ export default function ScrollSequence({
         loadedFramesRef.current.add(index);
 
         if (index === 0) {
-          const requestedPosition = pendingPositionRef.current;
+          const requestedPosition = targetFrameRef.current;
           const canvas = canvasRef.current;
 
           firstFrameReadyRef.current = true;
 
           if (canvas) {
-            drawFrame(canvas, image, fitMode);
-            currentFrameRef.current = 0;
-            currentPositionRef.current = 0;
+            renderedFrameRef.current = requestedPosition;
+            drawInterpolatedFrame(requestedPosition, true);
           }
 
           setFirstFrameReady(true);
-          render(requestedPosition, true);
           return;
         }
 
-        render(pendingPositionRef.current, true);
+        drawInterpolatedFrame(renderedFrameRef.current, true);
       } catch {
         // Missing frames should never surface as UI; the canvas keeps using the nearest decoded frame.
       }
@@ -658,7 +683,7 @@ export default function ScrollSequence({
         return;
       }
 
-      render(pendingPositionRef.current, true);
+      drawInterpolatedFrame(renderedFrameRef.current, true);
       deferRemainingPreload();
     };
 
@@ -704,59 +729,31 @@ export default function ScrollSequence({
         window.clearTimeout(orientationResizeTimeoutRef.current);
       }
     };
-  }, [fitMode, frameCount, frameSources, render, resizeCanvas]);
+  }, [drawInterpolatedFrame, frameCount, frameSources, resizeCanvas]);
 
   useEffect(() => {
-    const renderCurrentScrollPosition = () => {
-      const wrapper = wrapperRef.current;
-
-      if (!wrapper) {
-        return;
-      }
-
-      const rect = wrapper.getBoundingClientRect();
-      const viewportHeight = getStableViewportHeight();
-      const scrollDistance = Math.max(1, rect.height - viewportHeight);
-      const latest = clamp(-rect.top / scrollDistance);
-      const index = getFramePosition(latest, frameCount);
-
-      render(index);
+    const updateTargetFrame = (latest: number) => {
+      targetFrameRef.current = getFramePosition(latest, frameCount);
     };
 
-    renderCurrentScrollPosition();
-    window.addEventListener("scroll", renderCurrentScrollPosition, {
-      passive: true
-    });
-    window.addEventListener("resize", renderCurrentScrollPosition, {
-      passive: true
-    });
+    updateTargetFrame(scrollYProgress.get());
+    return scrollYProgress.on("change", updateTargetFrame);
+  }, [frameCount, scrollYProgress]);
+
+  useEffect(() => {
+    if (!firstFrameReady) {
+      return;
+    }
+
+    rafRef.current = window.requestAnimationFrame(animateFrames);
 
     return () => {
-      window.removeEventListener("scroll", renderCurrentScrollPosition);
-      window.removeEventListener("resize", renderCurrentScrollPosition);
+      if (rafRef.current !== null) {
+        window.cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
     };
-  }, [frameCount, render]);
-
-  useAnimationFrame(() => {
-    const wrapper = wrapperRef.current;
-
-    if (!wrapper) {
-      return;
-    }
-
-    const rect = wrapper.getBoundingClientRect();
-    const viewportHeight = getStableViewportHeight();
-
-    if (rect.top > viewportHeight || rect.bottom < 0) {
-      return;
-    }
-
-    const scrollDistance = Math.max(1, rect.height - viewportHeight);
-    const latest = clamp(-rect.top / scrollDistance);
-    const index = getFramePosition(latest, frameCount);
-
-    render(index);
-  });
+  }, [animateFrames, firstFrameReady]);
 
   return (
     <section
