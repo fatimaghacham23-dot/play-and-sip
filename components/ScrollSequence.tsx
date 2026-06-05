@@ -41,8 +41,8 @@ const PHONE_BREAKPOINT = 640;
 const MOBILE_VIDEO_SCRUB_BREAKPOINT = 768;
 const FRAME_SMOOTHING = 0.18;
 const VIDEO_SCRUB_SMOOTHING = 0.22;
-const MOBILE_CUP_SCALE = 0.9;
-const MOBILE_CUP_SHIFT_X = -12;
+const MOBILE_CUP_SCALE = 1;
+const MOBILE_CUP_SHIFT_X = 0;
 const MOBILE_VIDEO_SRC = "/sequence/matcha-scroll.mp4";
 const STABLE_VH_PROPERTY = "--stable-vh";
 
