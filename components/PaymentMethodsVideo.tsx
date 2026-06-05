@@ -1,11 +1,37 @@
+"use client";
+
+import { useEffect, useRef } from "react";
+import { useInViewport } from "@/lib/use-in-viewport";
+
 export function PaymentMethodsVideo({
   label = "CARD · CASH · RECEIPT"
 }: {
   ariaLabel?: string;
   label?: string;
 }) {
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const { ref, isInView } = useInViewport<HTMLElement>();
+
+  useEffect(() => {
+    const video = videoRef.current;
+
+    if (!video) {
+      return;
+    }
+
+    if (!isInView) {
+      video.pause();
+      return;
+    }
+
+    void video.play().catch(() => {
+      // Autoplay can be denied by the browser; the poster remains visible.
+    });
+  }, [isInView]);
+
   return (
     <section
+      ref={ref}
       aria-label="Payment methods"
       className="
         relative
@@ -27,6 +53,7 @@ export function PaymentMethodsVideo({
         "
       >
         <video
+          ref={videoRef}
           autoPlay
           muted
           loop

@@ -4,6 +4,7 @@ import Image from "next/image";
 import { motion, useReducedMotion } from "framer-motion";
 import type { CSSProperties } from "react";
 import { cn } from "@/lib/utils";
+import { useInViewport } from "@/lib/use-in-viewport";
 
 function TextArc({ text }: { text: string }) {
   const characters = text.split("");
@@ -48,10 +49,12 @@ export function FactArcSignature({
   style?: CSSProperties;
 }) {
   const reducedMotion = useReducedMotion();
+  const { ref, isInView } = useInViewport<HTMLDivElement>();
   const imageAlt = logoAlt ?? `${brandName} logo`;
 
   return (
     <motion.div
+      ref={ref}
       aria-label={`${brandName} logo seal`}
       className={cn(
         "pointer-events-none flex items-center justify-center opacity-85",
@@ -82,7 +85,7 @@ export function FactArcSignature({
     >
       <motion.div
         className="absolute inset-0 rounded-full opacity-80"
-        animate={reducedMotion ? undefined : { rotate: 360 }}
+        animate={reducedMotion || !isInView ? undefined : { rotate: 360 }}
         transition={{
           repeat: Infinity,
           duration: 24,

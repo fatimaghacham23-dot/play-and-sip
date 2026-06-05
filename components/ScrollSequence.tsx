@@ -10,6 +10,7 @@ import {
 } from "framer-motion";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { SiteButton } from "@/components/SiteButton";
+import { useInViewport } from "@/lib/use-in-viewport";
 
 export type StoryBeat = {
   eyebrow?: string;
@@ -38,8 +39,12 @@ const FIT_MODE: FitMode = "cover";
 const FRAME_PLAYBACK_END = 0.92;
 const PRIORITY_FRAME_COUNT = 8;
 const PHONE_BREAKPOINT = 640;
+const MOBILE_VIDEO_SCRUB_BREAKPOINT = 768;
+const FRAME_SMOOTHING = 0.18;
+const VIDEO_SCRUB_SMOOTHING = 0.22;
 const MOBILE_CUP_SCALE = 0.9;
 const MOBILE_CUP_SHIFT_X = -12;
+const MOBILE_VIDEO_SRC = "/sequence/matcha-scroll.mp4";
 const STABLE_VH_PROPERTY = "--stable-vh";
 
 const defaultGetFrameSrc = (index: number) =>
@@ -364,19 +369,35 @@ export default function ScrollSequence({
 }: ScrollSequenceProps) {
   const wrapperRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
   const framesRef = useRef<Array<HTMLImageElement | undefined>>([]);
   const targetFrameRef = useRef(0);
   const renderedFrameRef = useRef(0);
+  const targetVideoTimeRef = useRef(0);
+  const renderedVideoTimeRef = useRef(0);
   const rafRef = useRef<number | null>(null);
+  const videoRafRef = useRef<number | null>(null);
   const lastDrawnFrameRef = useRef(-1);
   const lastDrawnNextFrameRef = useRef(-1);
   const lastDrawnAlphaRef = useRef(-1);
   const lastViewportWidthRef = useRef(0);
   const orientationResizeTimeoutRef = useRef<number | null>(null);
   const firstFrameReadyRef = useRef(false);
+  const isSequenceInViewRef = useRef(false);
+  const useVideoScrubRef = useRef(false);
+  const videoReadyRef = useRef(false);
   const loadedFramesRef = useRef<Set<number>>(new Set());
   const [firstFrameReady, setFirstFrameReady] = useState(false);
+  const [preferVideoScrub, setPreferVideoScrub] = useState<boolean | null>(
+    null
+  );
+  const [videoReady, setVideoReady] = useState(false);
+  const [videoFailed, setVideoFailed] = useState(false);
   const reducedMotion = useReducedMotion();
+  const { ref: inViewportRef, isInView: isSequenceInView } =
+    useInViewport<HTMLDivElement>();
+  const useVideoScrub = preferVideoScrub === true && !videoFailed;
+  const showCanvas = firstFrameReady && (!useVideoScrub || !videoReady);
 
   const { scrollYProgress } = useScroll({
     target: wrapperRef,
@@ -396,6 +417,14 @@ export default function ScrollSequence({
   const frameSources = useMemo(
     () => Array.from({ length: frameCount }, (_, index) => getFrameSrc(index)),
     [frameCount, getFrameSrc]
+  );
+
+  const setWrapperElement = useCallback(
+    (node: HTMLDivElement | null) => {
+      wrapperRef.current = node;
+      inViewportRef.current = node;
+    },
+    [inViewportRef]
   );
 
   const getNearestLoadedFrame = useCallback(
@@ -523,17 +552,125 @@ export default function ScrollSequence({
     [fitMode, frameCount, getNearestLoadedFrame]
   );
 
+  const cancelCanvasFrame = useCallback(() => {
+    if (rafRef.current !== null) {
+      window.cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    }
+  }, []);
+
+  const cancelVideoScrub = useCallback(() => {
+    if (videoRafRef.current !== null) {
+      window.cancelAnimationFrame(videoRafRef.current);
+      videoRafRef.current = null;
+    }
+  }, []);
+
   const animateFrames = useCallback(() => {
+    rafRef.current = null;
+
+    if (
+      !firstFrameReadyRef.current ||
+      !isSequenceInViewRef.current ||
+      useVideoScrubRef.current
+    ) {
+      return;
+    }
+
     const current = renderedFrameRef.current;
     const target = targetFrameRef.current;
-    const next = current + (target - current) * 0.18;
+    const next = current + (target - current) * FRAME_SMOOTHING;
 
     renderedFrameRef.current =
       Math.abs(target - next) < 0.01 ? target : next;
 
     drawInterpolatedFrame(renderedFrameRef.current);
-    rafRef.current = window.requestAnimationFrame(animateFrames);
+
+    if (Math.abs(target - renderedFrameRef.current) >= 0.01) {
+      rafRef.current = window.requestAnimationFrame(animateFrames);
+    }
   }, [drawInterpolatedFrame]);
+
+  const scheduleCanvasFrame = useCallback(() => {
+    if (
+      rafRef.current !== null ||
+      !firstFrameReadyRef.current ||
+      !isSequenceInViewRef.current ||
+      useVideoScrubRef.current
+    ) {
+      return;
+    }
+
+    rafRef.current = window.requestAnimationFrame(animateFrames);
+  }, [animateFrames]);
+
+  const animateVideoScrub = useCallback(() => {
+    videoRafRef.current = null;
+
+    const video = videoRef.current;
+
+    if (
+      !video ||
+      !videoReadyRef.current ||
+      !isSequenceInViewRef.current ||
+      !useVideoScrubRef.current ||
+      !Number.isFinite(video.duration) ||
+      video.duration <= 0
+    ) {
+      return;
+    }
+
+    const current = renderedVideoTimeRef.current;
+    const target = Math.min(
+      video.duration,
+      Math.max(0, targetVideoTimeRef.current)
+    );
+    const next = current + (target - current) * VIDEO_SCRUB_SMOOTHING;
+
+    renderedVideoTimeRef.current =
+      Math.abs(target - next) < 0.01 ? target : next;
+
+    if (Math.abs(video.currentTime - renderedVideoTimeRef.current) > 0.016) {
+      try {
+        video.currentTime = renderedVideoTimeRef.current;
+      } catch {
+        setVideoFailed(true);
+      }
+    }
+
+    if (Math.abs(target - renderedVideoTimeRef.current) >= 0.01) {
+      videoRafRef.current = window.requestAnimationFrame(animateVideoScrub);
+    }
+  }, []);
+
+  const scheduleVideoScrub = useCallback(() => {
+    if (
+      videoRafRef.current !== null ||
+      !videoReadyRef.current ||
+      !isSequenceInViewRef.current ||
+      !useVideoScrubRef.current
+    ) {
+      return;
+    }
+
+    videoRafRef.current = window.requestAnimationFrame(animateVideoScrub);
+  }, [animateVideoScrub]);
+
+  const updateVideoTargetTime = useCallback((latest: number) => {
+    const video = videoRef.current;
+
+    if (
+      !video ||
+      !Number.isFinite(video.duration) ||
+      video.duration <= 0
+    ) {
+      targetVideoTimeRef.current = 0;
+      return;
+    }
+
+    targetVideoTimeRef.current =
+      clamp(latest / FRAME_PLAYBACK_END) * video.duration;
+  }, []);
 
   const resizeCanvas = useCallback(() => {
     const canvas = canvasRef.current;
@@ -542,7 +679,11 @@ export default function ScrollSequence({
       return;
     }
 
-    const pixelRatio = Math.min(window.devicePixelRatio || 1, 1.5);
+    const rawPixelRatio = window.devicePixelRatio || 1;
+    const pixelRatio =
+      window.innerWidth < PHONE_BREAKPOINT
+        ? Math.min(rawPixelRatio, 1.25)
+        : Math.min(rawPixelRatio, 1.5);
     const width = window.innerWidth;
     const height = getStableViewportHeight();
     const nextWidth = Math.round(width * pixelRatio);
@@ -559,8 +700,76 @@ export default function ScrollSequence({
   }, [drawInterpolatedFrame]);
 
   useEffect(() => {
+    const updateVideoPreference = () => {
+      setPreferVideoScrub(window.innerWidth < MOBILE_VIDEO_SCRUB_BREAKPOINT);
+    };
+
+    updateVideoPreference();
+    window.addEventListener("resize", updateVideoPreference, {
+      passive: true
+    });
+    window.addEventListener("orientationchange", updateVideoPreference);
+
+    return () => {
+      window.removeEventListener("resize", updateVideoPreference);
+      window.removeEventListener("orientationchange", updateVideoPreference);
+    };
+  }, []);
+
+  useEffect(() => {
+    isSequenceInViewRef.current = isSequenceInView;
+
+    if (!isSequenceInView) {
+      cancelCanvasFrame();
+      cancelVideoScrub();
+      return;
+    }
+
+    scheduleCanvasFrame();
+    scheduleVideoScrub();
+  }, [
+    cancelCanvasFrame,
+    cancelVideoScrub,
+    isSequenceInView,
+    scheduleCanvasFrame,
+    scheduleVideoScrub
+  ]);
+
+  useEffect(() => {
+    useVideoScrubRef.current = useVideoScrub;
+
+    if (useVideoScrub) {
+      cancelCanvasFrame();
+      scheduleVideoScrub();
+      return;
+    }
+
+    cancelVideoScrub();
+    scheduleCanvasFrame();
+  }, [
+    cancelCanvasFrame,
+    cancelVideoScrub,
+    scheduleCanvasFrame,
+    scheduleVideoScrub,
+    useVideoScrub
+  ]);
+
+  useEffect(() => {
+    videoReadyRef.current = videoReady;
+
+    if (videoReady) {
+      scheduleVideoScrub();
+    }
+  }, [scheduleVideoScrub, videoReady]);
+
+  useEffect(() => {
+    if (preferVideoScrub === null) {
+      return;
+    }
+
     let cancelled = false;
     let cancelDeferredPreload: (() => void) | null = null;
+    const shouldUseVideoScrub = preferVideoScrub && !videoFailed;
 
     framesRef.current = new Array(frameCount);
     loadedFramesRef.current = new Set();
@@ -672,6 +881,10 @@ export default function ScrollSequence({
         return;
       }
 
+      if (shouldUseVideoScrub) {
+        return;
+      }
+
       const priorityFrames = Array.from(
         { length: Math.min(PRIORITY_FRAME_COUNT, frameCount) },
         (_, index) => index
@@ -729,36 +942,77 @@ export default function ScrollSequence({
         window.clearTimeout(orientationResizeTimeoutRef.current);
       }
     };
-  }, [drawInterpolatedFrame, frameCount, frameSources, resizeCanvas]);
+  }, [
+    drawInterpolatedFrame,
+    frameCount,
+    frameSources,
+    preferVideoScrub,
+    resizeCanvas,
+    videoFailed
+  ]);
 
   useEffect(() => {
     const updateTargetFrame = (latest: number) => {
       targetFrameRef.current = getFramePosition(latest, frameCount);
+      updateVideoTargetTime(latest);
+      scheduleCanvasFrame();
+      scheduleVideoScrub();
     };
 
     updateTargetFrame(scrollYProgress.get());
     return scrollYProgress.on("change", updateTargetFrame);
-  }, [frameCount, scrollYProgress]);
+  }, [
+    frameCount,
+    scheduleCanvasFrame,
+    scheduleVideoScrub,
+    scrollYProgress,
+    updateVideoTargetTime
+  ]);
 
   useEffect(() => {
     if (!firstFrameReady) {
       return;
     }
 
-    rafRef.current = window.requestAnimationFrame(animateFrames);
+    firstFrameReadyRef.current = true;
+    scheduleCanvasFrame();
+  }, [firstFrameReady, scheduleCanvasFrame]);
 
-    return () => {
-      if (rafRef.current !== null) {
-        window.cancelAnimationFrame(rafRef.current);
-        rafRef.current = null;
-      }
-    };
-  }, [animateFrames, firstFrameReady]);
+  const handleVideoLoadedMetadata = useCallback(() => {
+    const video = videoRef.current;
+
+    if (!video || !Number.isFinite(video.duration) || video.duration <= 0) {
+      setVideoFailed(true);
+      return;
+    }
+
+    video.pause();
+    setVideoFailed(false);
+    setVideoReady(true);
+    videoReadyRef.current = true;
+    updateVideoTargetTime(scrollYProgress.get());
+    renderedVideoTimeRef.current = targetVideoTimeRef.current;
+
+    try {
+      video.currentTime = renderedVideoTimeRef.current;
+    } catch {
+      setVideoFailed(true);
+      return;
+    }
+
+    scheduleVideoScrub();
+  }, [scheduleVideoScrub, scrollYProgress, updateVideoTargetTime]);
+
+  const handleVideoError = useCallback(() => {
+    setVideoReady(false);
+    setVideoFailed(true);
+    videoReadyRef.current = false;
+  }, []);
 
   return (
     <section
       id={id}
-      ref={wrapperRef}
+      ref={setWrapperElement}
       aria-label={ariaLabel}
       className="relative bg-[#050505]"
       style={{ height: "calc(var(--stable-vh) * 4)" }}
@@ -773,11 +1027,32 @@ export default function ScrollSequence({
             opacity: firstFrameReady ? 0 : 1
           }}
         />
+        {useVideoScrub ? (
+          <video
+            ref={videoRef}
+            aria-hidden="true"
+            muted
+            playsInline
+            preload="auto"
+            poster={frameSources[0]}
+            onError={handleVideoError}
+            onLoadedMetadata={handleVideoLoadedMetadata}
+            className={`absolute inset-0 z-[1] h-[var(--stable-vh)] w-screen bg-[#050505] object-cover transition-opacity duration-700 ${
+              videoReady && !videoFailed ? "opacity-100" : "opacity-0"
+            }`}
+            style={{
+              transform: `translateX(${MOBILE_CUP_SHIFT_X}px) scale(${MOBILE_CUP_SCALE})`,
+              transformOrigin: "center center"
+            }}
+          >
+            <source src={MOBILE_VIDEO_SRC} type="video/mp4" />
+          </video>
+        ) : null}
         <canvas
           ref={canvasRef}
           aria-hidden="true"
           className={`absolute inset-0 z-[1] h-[var(--stable-vh)] w-screen bg-[#050505] transition-opacity duration-700 ${
-            firstFrameReady ? "opacity-100" : "opacity-0"
+            showCanvas ? "opacity-100" : "opacity-0"
           }`}
         />
 

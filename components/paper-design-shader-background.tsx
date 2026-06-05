@@ -2,9 +2,11 @@
 
 import { useEffect, useState } from "react";
 import { GrainGradient } from "@paper-design/shaders-react";
+import { useInViewport } from "@/lib/use-in-viewport";
 
 export function GradientBackground() {
   const [useShader, setUseShader] = useState(false);
+  const { ref, isInView } = useInViewport<HTMLDivElement>();
 
   useEffect(() => {
     const reduceMotion = window.matchMedia(
@@ -17,6 +19,7 @@ export function GradientBackground() {
   if (!useShader) {
     return (
       <div
+        ref={ref}
         className="
           pointer-events-none
           absolute
@@ -36,6 +39,7 @@ export function GradientBackground() {
             blur-xl
             will-change-transform
           "
+          style={{ animationPlayState: isInView ? "running" : "paused" }}
         />
         <div className="absolute inset-0 bg-black/18" />
         <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,transparent_0%,rgba(0,0,0,0.12)_45%,rgba(0,0,0,0.72)_100%)]" />
@@ -45,6 +49,7 @@ export function GradientBackground() {
 
   return (
     <div
+      ref={ref}
       className="
         pointer-events-none
         absolute
@@ -66,7 +71,7 @@ export function GradientBackground() {
         offsetY={0}
         scale={1.08}
         rotation={0}
-        speed={0.45}
+        speed={isInView ? 0.45 : 0}
         colors={[
           "hsl(38, 90%, 34%)",
           "hsl(82, 35%, 25%)",

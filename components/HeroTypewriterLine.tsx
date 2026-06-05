@@ -2,6 +2,7 @@
 
 import { motion } from "framer-motion";
 import { Typewriter } from "@/components/ui/typewriter";
+import { useInViewport } from "@/lib/use-in-viewport";
 
 type HeroTypewriterLineProps = {
   accent: string;
@@ -14,8 +15,11 @@ export function HeroTypewriterLine({
   items,
   prefix
 }: HeroTypewriterLineProps) {
+  const { ref, isInView } = useInViewport<HTMLDivElement>();
+
   return (
     <motion.div
+      ref={ref}
       className="
         pointer-events-none
         relative
@@ -56,6 +60,7 @@ export function HeroTypewriterLine({
         <span className="text-white/70">{accent}</span>
 
         <Typewriter
+          active={isInView}
           text={items}
           speed={65}
           waitTime={1600}

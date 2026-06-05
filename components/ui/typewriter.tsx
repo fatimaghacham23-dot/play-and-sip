@@ -6,6 +6,7 @@ import { motion, type Variants } from "framer-motion"
 import { cn } from "@/lib/utils"
 
 interface TypewriterProps {
+  active?: boolean
   text: string | string[]
   speed?: number
   initialDelay?: number
@@ -24,6 +25,7 @@ interface TypewriterProps {
 }
 
 const Typewriter = ({
+  active = true,
   text,
   speed = 50,
   initialDelay = 0,
@@ -56,6 +58,10 @@ const Typewriter = ({
   const texts = useMemo(() => (Array.isArray(text) ? text : [text]), [text])
 
   useEffect(() => {
+    if (!active) {
+      return
+    }
+
     let timeout: NodeJS.Timeout
 
     const currentText = texts[currentTextIndex]
@@ -108,6 +114,7 @@ const Typewriter = ({
     currentTextIndex,
     loop,
     initialDelay,
+    active,
   ])
 
   return (
@@ -124,7 +131,7 @@ const Typewriter = ({
               : ""
           )}
           initial="initial"
-          animate="animate"
+          animate={active ? "animate" : "initial"}
         >
           {cursorChar}
         </motion.span>
