@@ -35,7 +35,6 @@ type ScrollSequenceProps = {
 };
 
 const FRAME_COUNT = 60;
-const FIT_MODE: FitMode = "cover";
 const FRAME_PLAYBACK_END = 0.92;
 const PRIORITY_FRAME_COUNT = 8;
 const PHONE_BREAKPOINT = 640;
@@ -115,30 +114,21 @@ function getStableViewportHeight() {
 function drawImage(
   context: CanvasRenderingContext2D,
   canvas: HTMLCanvasElement,
-  image: HTMLImageElement,
-  fitMode: FitMode
+  image: HTMLImageElement
 ) {
   if (image.naturalWidth === 0 || image.naturalHeight === 0) {
     return;
   }
 
-  const width = canvas.width;
-  const height = canvas.height;
-  const imageRatio = image.naturalWidth / image.naturalHeight;
-  const canvasRatio = width / height;
-  const scale =
-    fitMode === "cover"
-      ? canvasRatio > imageRatio
-        ? width / image.naturalWidth
-        : height / image.naturalHeight
-      : canvasRatio > imageRatio
-        ? height / image.naturalHeight
-        : width / image.naturalWidth;
-
-  const drawWidth = image.naturalWidth * scale;
-  const drawHeight = image.naturalHeight * scale;
-  const x = (width - drawWidth) / 2;
-  const y = (height - drawHeight) / 2;
+  const canvasWidth = canvas.width;
+  const canvasHeight = canvas.height;
+  const imageWidth = image.naturalWidth;
+  const imageHeight = image.naturalHeight;
+  const scale = Math.max(canvasWidth / imageWidth, canvasHeight / imageHeight);
+  const drawWidth = imageWidth * scale;
+  const drawHeight = imageHeight * scale;
+  const x = (canvasWidth - drawWidth) / 2;
+  const y = (canvasHeight - drawHeight) / 2;
   const isMobile = window.innerWidth < PHONE_BREAKPOINT;
   const mobileCupScale = isMobile ? MOBILE_CUP_SCALE : 1;
   const cssWidth = parseFloat(canvas.style.width) || window.innerWidth;
@@ -155,7 +145,6 @@ function drawImage(
 function drawFrame(
   canvas: HTMLCanvasElement,
   image: HTMLImageElement,
-  fitMode: FitMode,
   nextImage?: HTMLImageElement,
   nextOpacity = 0
 ) {
@@ -168,7 +157,7 @@ function drawFrame(
   context.clearRect(0, 0, canvas.width, canvas.height);
   context.imageSmoothingEnabled = true;
   context.imageSmoothingQuality = "medium";
-  drawImage(context, canvas, image, fitMode);
+  drawImage(context, canvas, image);
 
   if (
     nextImage &&
@@ -178,7 +167,7 @@ function drawFrame(
     nextOpacity > 0
   ) {
     context.globalAlpha = nextOpacity;
-    drawImage(context, canvas, nextImage, fitMode);
+    drawImage(context, canvas, nextImage);
     context.globalAlpha = 1;
   }
 }
@@ -363,7 +352,6 @@ export default function ScrollSequence({
   ariaLabel = "Scroll-linked product animation",
   beats,
   frameCount = FRAME_COUNT,
-  fitMode = FIT_MODE,
   getFrameSrc = defaultGetFrameSrc,
   id
 }: ScrollSequenceProps) {
@@ -544,12 +532,11 @@ export default function ScrollSequence({
       drawFrame(
         canvas,
         frame,
-        fitMode,
         nextFrame,
         safeNextIndex !== safeBaseIndex ? alpha : 0
       );
     },
-    [fitMode, frameCount, getNearestLoadedFrame]
+    [frameCount, getNearestLoadedFrame]
   );
 
   const cancelCanvasFrame = useCallback(() => {
@@ -1017,13 +1004,13 @@ export default function ScrollSequence({
       className="relative bg-[#050505]"
       style={{ height: "calc(var(--stable-vh) * 4)" }}
     >
-      <div className="relative sticky top-0 h-[var(--stable-vh)] w-full overflow-hidden bg-[#050505]">
+      <div className="relative sticky top-0 h-[var(--stable-vh)] w-screen overflow-hidden bg-[#050505]">
         <div
           aria-hidden="true"
           className="absolute inset-0 z-0 bg-center bg-no-repeat transition-opacity duration-500"
           style={{
             backgroundImage: `url('${frameSources[0]}')`,
-            backgroundSize: fitMode === "cover" ? "cover" : "contain",
+            backgroundSize: "cover",
             opacity: firstFrameReady ? 0 : 1
           }}
         />
